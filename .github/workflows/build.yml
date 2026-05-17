@@ -1,0 +1,309 @@
+name: Build Portable Binaries
+
+# Trigger on version tags or manually
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# ── NOTE: RISC-V native runner requires the RISE GitHub App ─────────────────
+# Install from: https://riseproject.dev/risc-v-runners/
+# Then runs-on: ubuntu-24.04-riscv works with real RISC-V hardware — no QEMU
+# ────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  # ── x86_64 Vulkan ──────────────────────────────────────────────────────────
+  build-amd64:
+    name: x86_64 — Vulkan
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git \
+            libvulkan-dev glslc spirv-headers \
+            libdrm-dev pkg-config
+
+      - name: Clone whisper.cpp
+        run: git clone --depth=1 https://github.com/ggml-org/whisper.cpp
+
+      - name: Build (Vulkan, no ffmpeg linkage)
+        run: |
+          cd whisper.cpp
+          cmake -B build \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_FFMPEG=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+          cmake --build build --config Release
+
+      - name: Verify — no ffmpeg deps, check GLIBC floor
+        run: |
+          echo "=== ffmpeg linkage (must be empty) ==="
+          ldd whisper.cpp/build/bin/whisper-cli | grep libav || echo "✓ clean"
+          echo "=== GLIBC requirement ==="
+          objdump -T whisper.cpp/build/bin/whisper-cli 2>/dev/null | \
+            grep -oP 'GLIBC_\K[0-9.]+' | sort -V | tail -1 | \
+            xargs -I{} echo "Requires GLIBC {}"
+
+      - name: Collect binaries and libs
+        run: |
+          mkdir -p dist/bin/amd64/vulkan
+          cp whisper.cpp/build/bin/whisper-cli    dist/bin/amd64/vulkan/
+          cp whisper.cpp/build/bin/whisper-server  dist/bin/amd64/vulkan/
+          cp whisper.cpp/build/ggml/src/libggml*.so*            dist/bin/amd64/vulkan/
+          cp whisper.cpp/build/ggml/src/ggml-vulkan/libggml-vulkan*.so* \
+             dist/bin/amd64/vulkan/ 2>/dev/null || true
+          cp whisper.cpp/build/src/libwhisper*.so*              dist/bin/amd64/vulkan/
+          strip --strip-unneeded dist/bin/amd64/vulkan/whisper-cli
+          strip --strip-unneeded dist/bin/amd64/vulkan/whisper-server
+          ls -lh dist/bin/amd64/vulkan/
+
+      - name: Bundle static ffmpeg (amd64)
+        run: |
+          curl -fsSL \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+            -o ffmpeg.tar.xz
+          tar -xf ffmpeg.tar.xz
+          cp ffmpeg-*-amd64-static/ffmpeg dist/bin/amd64/
+          chmod +x dist/bin/amd64/ffmpeg
+          dist/bin/amd64/ffmpeg -version | head -1
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-whisper-amd64
+          path: dist/
+          compression-level: 6
+
+  # ── ARM64 native runner ────────────────────────────────────────────────────
+  build-arm64:
+    name: ARM64 — Vulkan (native runner)
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git \
+            libvulkan-dev glslc spirv-headers \
+            libdrm-dev pkg-config
+
+      - name: Clone whisper.cpp
+        run: git clone --depth=1 https://github.com/ggml-org/whisper.cpp
+
+      - name: Detect CPU and set march flags
+        run: |
+          CPU=$(grep "CPU part" /proc/cpuinfo | head -1 | awk '{print $NF}')
+          echo "CPU part: $CPU"
+          case $CPU in
+            0xd81)
+              echo "MARCH=-march=armv9-a+sve+sve2+i8mm+bf16" >> $GITHUB_ENV
+              echo "BIN_SUBDIR=a720" >> $GITHUB_ENV
+              ;;
+            0xd0b)
+              echo "MARCH=-march=armv8.2-a+dotprod+fp16+i8mm" >> $GITHUB_ENV
+              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV
+              ;;
+            *)
+              echo "MARCH=-march=armv8-a" >> $GITHUB_ENV
+              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV
+              ;;
+          esac
+
+      - name: Build (Vulkan, no ffmpeg linkage)
+        run: |
+          cd whisper.cpp
+          cmake -B build \
+            -DGGML_VULKAN=ON \
+            -DWHISPER_FFMPEG=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="${{ env.MARCH }}" \
+            -DCMAKE_CXX_FLAGS="${{ env.MARCH }}" \
+            -G Ninja
+          cmake --build build --config Release
+
+      - name: Collect binaries and libs
+        run: |
+          mkdir -p dist/bin/arm64/${{ env.BIN_SUBDIR }}
+          cp whisper.cpp/build/bin/whisper-cli    dist/bin/arm64/${{ env.BIN_SUBDIR }}/
+          cp whisper.cpp/build/bin/whisper-server  dist/bin/arm64/${{ env.BIN_SUBDIR }}/
+          cp whisper.cpp/build/ggml/src/libggml*.so* \
+             dist/bin/arm64/${{ env.BIN_SUBDIR }}/
+          cp whisper.cpp/build/ggml/src/ggml-vulkan/libggml-vulkan*.so* \
+             dist/bin/arm64/${{ env.BIN_SUBDIR }}/ 2>/dev/null || true
+          cp whisper.cpp/build/src/libwhisper*.so* \
+             dist/bin/arm64/${{ env.BIN_SUBDIR }}/
+          strip --strip-unneeded dist/bin/arm64/${{ env.BIN_SUBDIR }}/whisper-cli
+          strip --strip-unneeded dist/bin/arm64/${{ env.BIN_SUBDIR }}/whisper-server
+
+      - name: Bundle static ffmpeg (arm64)
+        run: |
+          curl -fsSL \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz" \
+            -o ffmpeg.tar.xz
+          tar -xf ffmpeg.tar.xz
+          cp ffmpeg-*-arm64-static/ffmpeg dist/bin/arm64/
+          chmod +x dist/bin/arm64/ffmpeg
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-whisper-arm64
+          path: dist/
+          compression-level: 6
+
+  # ── RISC-V64 native hardware via RISE runners ─────────────────────────────
+  # Requires: install RISE GitHub App from https://riseproject.dev/risc-v-runners/
+  # runs-on: ubuntu-24.04-riscv uses real RISC-V bare-metal — no QEMU
+  build-riscv64:
+    name: RISC-V64 — CPU (RISE native runner)
+    runs-on: ubuntu-24.04-riscv
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git \
+            libdrm-dev pkg-config
+
+      - name: Clone whisper.cpp
+        run: git clone --depth=1 https://github.com/ggml-org/whisper.cpp
+
+      - name: Build (CPU only — no Vulkan driver on RISC-V yet)
+        run: |
+          cd whisper.cpp
+          cmake -B build \
+            -DGGML_VULKAN=OFF \
+            -DWHISPER_FFMPEG=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+          cmake --build build --config Release
+
+      - name: Verify architecture
+        run: |
+          file whisper.cpp/build/bin/whisper-cli
+          uname -m
+
+      - name: Collect binaries and libs
+        run: |
+          mkdir -p dist/bin/riscv64/cpu
+          cp whisper.cpp/build/bin/whisper-cli    dist/bin/riscv64/cpu/
+          cp whisper.cpp/build/bin/whisper-server  dist/bin/riscv64/cpu/
+          cp whisper.cpp/build/ggml/src/libggml*.so* dist/bin/riscv64/cpu/
+          cp whisper.cpp/build/src/libwhisper*.so*   dist/bin/riscv64/cpu/
+          strip --strip-unneeded dist/bin/riscv64/cpu/whisper-cli
+          strip --strip-unneeded dist/bin/riscv64/cpu/whisper-server
+          ls -lh dist/bin/riscv64/cpu/
+
+      # No static ffmpeg for riscv64 from johnvansickle yet
+      # whisper.sh will fall back to system ffmpeg on riscv64
+      - name: Note about ffmpeg on riscv64
+        run: |
+          mkdir -p dist/bin/riscv64
+          cat > dist/bin/riscv64/ffmpeg.note << 'EOF'
+          No static ffmpeg binary available for riscv64 yet.
+          Install system ffmpeg: sudo apt install ffmpeg
+          whisper.sh will use system ffmpeg automatically.
+          EOF
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ai-whisper-riscv64
+          path: dist/
+          compression-level: 6
+
+  # ── Assemble and release ───────────────────────────────────────────────────
+  release:
+    name: Assemble Release
+    needs: [build-amd64, build-arm64, build-riscv64]
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all arch artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: all-artifacts
+
+      - name: Assemble portable folder
+        run: |
+          mkdir -p release/ai-whisper
+
+          # Merge all arch builds into one folder
+          for arch in amd64 arm64 riscv64; do
+            if [ -d "all-artifacts/ai-whisper-$arch" ]; then
+              cp -r all-artifacts/ai-whisper-$arch/. release/ai-whisper/
+            fi
+          done
+
+          # Copy project files
+          cp whisper.sh        release/ai-whisper/
+          cp -r public/        release/ai-whisper/public/
+          cp -r samples/       release/ai-whisper/samples/ 2>/dev/null || true
+          cp README.md         release/ai-whisper/ 2>/dev/null || true
+
+          chmod +x release/ai-whisper/whisper.sh
+
+          echo "=== Release structure ==="
+          find release/ai-whisper -type f | sort
+
+      - name: Create release tarball
+        run: |
+          cd release
+          tar -czf ai-whisper-${{ github.ref_name }}.tar.gz ai-whisper/
+          ls -lh ai-whisper-${{ github.ref_name }}.tar.gz
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/ai-whisper-${{ github.ref_name }}.tar.gz
+          generate_release_notes: true
+          body: |
+            ## ai-whisper ${{ github.ref_name }}
+
+            Portable whisper.cpp — download, extract, run. No install needed.
+
+            ### Quick start
+            ```bash
+            tar -xzf ai-whisper-${{ github.ref_name }}.tar.gz
+            cd ai-whisper
+            ./whisper.sh --test
+            ./whisper.sh --server --port=8082
+            ```
+
+            ### Architectures included
+
+            | Target | Backend | Runner |
+            |---|---|---|
+            | `bin/amd64/vulkan/` | Vulkan GPU | `ubuntu-24.04` |
+            | `bin/amd64/ffmpeg`  | Static ffmpeg | bundled |
+            | `bin/arm64/vulkan/` | Vulkan GPU | `ubuntu-24.04-arm` native |
+            | `bin/arm64/ffmpeg`  | Static ffmpeg | bundled |
+            | `bin/riscv64/cpu/` | CPU only | `ubuntu-24.04-riscv` native (RISE) |
+
+            ### Requirements
+            - GLIBC 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 40+)
+            - Vulkan GPU driver for GPU acceleration
+            - Models not included — [download separately](#models)
+
+            ### Models
+            ```bash
+            mkdir -p models
+            wget -c https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin \
+                 -O models/ggml-large-v3-turbo.bin
+            ```

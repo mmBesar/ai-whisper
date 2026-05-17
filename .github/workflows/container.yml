@@ -1,0 +1,120 @@
+name: Build Container Image
+
+# Trigger on version tags or manually
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# ── NOTE: RISC-V64 native build requires the RISE GitHub App ────────────────
+# Install from: https://riseproject.dev/risc-v-runners/
+# Without it, the riscv64 job will fail — disable it in the matrix until installed
+# ────────────────────────────────────────────────────────────────────────────
+
+jobs:
+  # ── Build per-arch images ──────────────────────────────────────────────────
+  # We build natively on each arch runner for best performance and correctness.
+  # Then merge into a single multi-arch manifest with docker buildx imagetools.
+
+  build-image:
+    name: Build ${{ matrix.arch }} image
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            platform: linux/amd64
+            vulkan: "ON"
+
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            vulkan: "ON"
+
+          - arch: riscv64
+            runner: ubuntu-24.04-riscv   # RISE native runner required
+            platform: linux/riscv64
+            vulkan: "OFF"               # No Vulkan driver on RISC-V yet
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mmbesar/ai-whisper
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push arch-specific image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: true
+          # Tag with arch suffix — merged into manifest in next job
+          tags: ghcr.io/mmbesar/ai-whisper:${{ github.ref_name }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          build-args: |
+            GGML_VULKAN=${{ matrix.vulkan }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            GIT_SHA=${{ github.sha }}
+            VERSION=${{ github.ref_name }}
+
+  # ── Merge into multi-arch manifest ────────────────────────────────────────
+  merge-manifest:
+    name: Merge multi-arch manifest
+    needs: build-image
+    runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create and push multi-arch manifest
+        run: |
+          VERSION="${{ github.ref_name }}"
+          BASE="ghcr.io/mmbesar/ai-whisper"
+
+          # Create versioned multi-arch manifest
+          docker buildx imagetools create \
+            --tag "${BASE}:${VERSION}" \
+            --tag "${BASE}:latest" \
+            "${BASE}:${VERSION}-amd64" \
+            "${BASE}:${VERSION}-arm64" \
+            "${BASE}:${VERSION}-riscv64"
+
+      - name: Inspect final manifest
+        run: |
+          docker buildx imagetools inspect ghcr.io/mmbesar/ai-whisper:latest
