@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ai-whisper</title>
+
+<!-- Favicons — auto dark/light -->
+<link rel="icon" href="favicon-dark.svg"  media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon-light.svg" media="(prefers-color-scheme: light)">
+<link rel="icon" href="favicon-dark.svg"><!-- fallback -->
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400;500&family=Noto+Sans+Arabic:wght@300;400;500&display=swap" rel="stylesheet">
+
+<style>
+  /* ── Catppuccin Latte (light) ── */
+  :root {
+    --base:#eff1f5;--mantle:#e6e9ef;--surface0:#ccd0da;--surface1:#bcc0cc;
+    --overlay0:#9ca0b0;--text:#4c4f69;--subtext:#6c6f85;
+    --accent:#1e66f5;--green:#40a02b;--red:#d20f39;--yellow:#df8e1d;
+    --mauve:#8839ef;--border:#ccd0da;
+  }
+  /* ── Catppuccin Mocha (dark) ── */
+  @media (prefers-color-scheme: dark) { :root {
+    --base:#1e1e2e;--mantle:#181825;--surface0:#313244;--surface1:#45475a;
+    --overlay0:#6c7086;--text:#cdd6f4;--subtext:#a6adc8;
+    --accent:#89b4fa;--green:#a6e3a1;--red:#f38ba8;--yellow:#f9e2af;
+    --mauve:#cba6f7;--border:#313244;
+  }}
+  [data-theme="light"] {
+    --base:#eff1f5;--mantle:#e6e9ef;--surface0:#ccd0da;--surface1:#bcc0cc;
+    --overlay0:#9ca0b0;--text:#4c4f69;--subtext:#6c6f85;
+    --accent:#1e66f5;--green:#40a02b;--red:#d20f39;--yellow:#df8e1d;
+    --mauve:#8839ef;--border:#ccd0da;
+  }
+  [data-theme="dark"] {
+    --base:#1e1e2e;--mantle:#181825;--surface0:#313244;--surface1:#45475a;
+    --overlay0:#6c7086;--text:#cdd6f4;--subtext:#a6adc8;
+    --accent:#89b4fa;--green:#a6e3a1;--red:#f38ba8;--yellow:#f9e2af;
+    --mauve:#cba6f7;--border:#313244;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--base); color: var(--text);
+    font-family: 'IBM Plex Sans','Noto Sans Arabic',sans-serif;
+    font-weight: 300; min-height: 100vh;
+    display: flex; flex-direction: column;
+    transition: background 0.2s, color 0.2s;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--mantle); border-bottom: 1px solid var(--border);
+    padding: 13px 28px; display: flex; align-items: center; gap: 14px;
+  }
+  .logo {
+    font-family: 'IBM Plex Mono',monospace; font-size: 13px;
+    color: var(--accent); letter-spacing: 0.08em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .logo-icon { width: 22px; height: 22px; flex-shrink: 0; }
+  .logo span { color: var(--overlay0); }
+  .header-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .theme-btns { display: flex; gap: 4px; }
+  .theme-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--subtext); font-family: 'IBM Plex Mono',monospace;
+    font-size: 10px; padding: 4px 9px; border-radius: 3px;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .theme-btn:hover,.theme-btn.active { border-color: var(--accent); color: var(--accent); }
+
+  .status-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--overlay0); flex-shrink: 0; transition: background 0.3s;
+  }
+  .status-dot.ready   { background: var(--green);  box-shadow: 0 0 7px var(--green); }
+  .status-dot.working { background: var(--yellow); box-shadow: 0 0 7px var(--yellow); animation: pulse 1s infinite; }
+  .status-dot.error   { background: var(--red);    box-shadow: 0 0 7px var(--red); }
+  .status-label { font-family: 'IBM Plex Mono',monospace; font-size: 11px; color: var(--subtext); }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Layout ── */
+  main { display: grid; grid-template-columns: 340px 1fr; flex: 1; height: calc(100vh - 48px); }
+
+  .panel-left {
+    background: var(--mantle); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow-y: auto;
+  }
+  .section { padding: 20px; border-bottom: 1px solid var(--border); }
+  .section-label {
+    font-family: 'IBM Plex Mono',monospace; font-size: 10px;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--overlay0); margin-bottom: 14px;
+  }
+
+  input[type="text"], input[type="number"], select {
+    width: 100%; background: var(--surface0); border: 1px solid var(--border);
+    color: var(--text); font-family: 'IBM Plex Mono',monospace;
+    font-size: 12px; padding: 8px 10px; border-radius: 4px;
+    outline: none; transition: border-color 0.2s;
+  }
+  input[type="text"]:focus, input[type="number"]:focus, select:focus { border-color: var(--accent); }
+  select { cursor: pointer; }
+
+  .model-hint { font-family: 'IBM Plex Mono',monospace; font-size: 10px; color: var(--overlay0); margin-top: 6px; }
+
+  .drop-zone {
+    border: 1px dashed var(--border); border-radius: 6px;
+    padding: 28px 16px; text-align: center; cursor: pointer;
+    transition: border-color 0.2s, background 0.2s; position: relative;
+  }
+  .drop-zone:hover,.drop-zone.drag-over {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+  }
+  .drop-zone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .drop-icon { font-size: 26px; margin-bottom: 8px; opacity: 0.45; }
+  .drop-text { font-size: 13px; color: var(--subtext); line-height: 1.5; }
+  .drop-text strong { color: var(--text); font-weight: 400; }
+  .file-name {
+    font-family: 'IBM Plex Mono',monospace; font-size: 11px;
+    color: var(--green); margin-top: 8px; word-break: break-all; display: none;
+  }
+
+  .opt-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  .opt-row:last-child { margin-bottom: 0; }
+  .opt-label { font-size: 13px; color: var(--text); }
+  .opt-sub   { font-size: 11px; color: var(--subtext); margin-top: 2px; }
+  .opt-row select, .opt-row input[type="number"] { width: auto; min-width: 110px; flex-shrink: 0; }
+  .opt-row input[type="number"] { text-align: center; min-width: 70px; }
+
+  .toggle { position: relative; width: 36px; height: 20px; flex-shrink: 0; }
+  .toggle input { display: none; }
+  .toggle-track {
+    position: absolute; inset: 0; background: var(--surface1);
+    border-radius: 20px; cursor: pointer; transition: background 0.2s;
+  }
+  .toggle-track::after {
+    content: ''; position: absolute; left: 3px; top: 3px;
+    width: 14px; height: 14px; background: var(--overlay0);
+    border-radius: 50%; transition: transform 0.2s, background 0.2s;
+  }
+  .toggle input:checked + .toggle-track { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .toggle input:checked + .toggle-track::after { transform: translateX(16px); background: var(--accent); }
+
+  .btn-run {
+    width: 100%; padding: 12px; background: var(--accent); border: none;
+    color: var(--base); font-family: 'IBM Plex Mono',monospace;
+    font-size: 13px; letter-spacing: 0.06em; cursor: pointer;
+    border-radius: 4px; transition: opacity 0.2s; font-weight: 500;
+  }
+  .btn-run:hover:not(:disabled) { opacity: 0.86; }
+  .btn-run:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  /* ── Right panel ── */
+  .panel-right { background: var(--base); display: flex; flex-direction: column; overflow: hidden; }
+  .output-header {
+    background: var(--mantle); padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .output-title {
+    font-family: 'IBM Plex Mono',monospace; font-size: 10px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--overlay0);
+  }
+  .output-actions { margin-left: auto; display: flex; gap: 6px; }
+  .btn-sm {
+    padding: 5px 12px; background: transparent;
+    border: 1px solid var(--border); color: var(--subtext);
+    font-family: 'IBM Plex Mono',monospace; font-size: 11px;
+    cursor: pointer; border-radius: 3px; transition: border-color 0.15s, color 0.15s;
+  }
+  .btn-sm:hover { border-color: var(--text); color: var(--text); }
+  .btn-sm.hi { border-color: var(--accent); color: var(--accent); }
+
+  .progress-bar-wrap { height: 2px; background: var(--surface0); overflow: hidden; display: none; }
+  .progress-bar-fill { height: 100%; background: var(--accent); animation: indeterminate 1.4s infinite ease-in-out; }
+  @keyframes indeterminate {
+    0%   { transform: translateX(-100%) scaleX(0.5); }
+    50%  { transform: translateX(0%)    scaleX(0.7); }
+    100% { transform: translateX(100%)  scaleX(0.5); }
+  }
+
+  .output-body { flex: 1; overflow-y: auto; padding: 24px 28px; }
+
+  /* SRT display */
+  .srt-block { margin-bottom: 18px; animation: fadeIn 0.25s ease; }
+  .srt-index { font-family: 'IBM Plex Mono',monospace; font-size: 10px; color: var(--overlay0); margin-bottom: 1px; }
+  .srt-time  { font-family: 'IBM Plex Mono',monospace; font-size: 11px; color: var(--mauve); margin-bottom: 4px; }
+  .srt-text  {
+    font-size: 15px; line-height: 1.7; color: var(--text);
+    font-family: 'IBM Plex Sans','Noto Sans Arabic',sans-serif; font-weight: 300;
+    word-break: normal; overflow-wrap: break-word;
+  }
+  .srt-text.rtl {
+    direction: rtl; text-align: right;
+    font-family: 'Noto Sans Arabic','IBM Plex Sans',sans-serif;
+    word-break: keep-all; overflow-wrap: normal; hyphens: none;
+  }
+
+  /* Segments display */
+  .segments { display: flex; flex-direction: column; }
+  .segment {
+    display: grid; grid-template-columns: 150px 1fr; gap: 16px;
+    padding: 10px 0; border-bottom: 1px solid var(--border); animation: fadeIn 0.25s ease;
+  }
+  .segment:last-child { border-bottom: none; }
+  .seg-time { font-family: 'IBM Plex Mono',monospace; font-size: 11px; color: var(--mauve); padding-top: 3px; }
+  .seg-text {
+    font-size: 15px; line-height: 1.7; color: var(--text);
+    font-family: 'IBM Plex Sans','Noto Sans Arabic',sans-serif; font-weight: 300;
+    word-break: normal; overflow-wrap: break-word;
+  }
+  .seg-text.rtl {
+    direction: rtl; text-align: right;
+    font-family: 'Noto Sans Arabic','IBM Plex Sans',sans-serif;
+    word-break: keep-all; overflow-wrap: normal; hyphens: none;
+  }
+
+  .plain-text {
+    font-size: 15px; line-height: 1.8; color: var(--text);
+    white-space: pre-wrap; word-break: normal; overflow-wrap: break-word;
+  }
+
+  @keyframes fadeIn { from { opacity:0; transform: translateY(3px); } to { opacity:1; } }
+
+  .empty-state {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    height: 100%; gap: 10px; color: var(--overlay0);
+  }
+  .empty-icon { font-size: 36px; opacity: 0.35; }
+  .empty-text { font-family: 'IBM Plex Mono',monospace; font-size: 12px; letter-spacing: 0.05em; }
+
+  .error-msg {
+    font-family: 'IBM Plex Mono',monospace; font-size: 12px; color: var(--red);
+    background: color-mix(in srgb, var(--red) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--red) 25%, transparent);
+    border-radius: 4px; padding: 16px 20px; line-height: 1.7;
+  }
+
+  /* Copy fallback popup */
+  .copy-area {
+    position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%);
+    width: min(600px, 90vw); background: var(--mantle);
+    border: 1px solid var(--accent); border-radius: 6px;
+    padding: 14px; z-index: 100;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    display: none; flex-direction: column; gap: 10px;
+  }
+  .copy-area-header { display: flex; align-items: center; }
+  .copy-area-title { font-family: 'IBM Plex Mono',monospace; font-size: 11px; color: var(--subtext); flex: 1; }
+  .btn-close { background: transparent; border: none; color: var(--subtext); font-size: 18px; cursor: pointer; line-height: 1; padding: 0 2px; }
+  .copy-area textarea {
+    width: 100%; height: 160px; background: var(--surface0);
+    border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text); font-family: 'IBM Plex Mono',monospace;
+    font-size: 11px; padding: 8px; resize: none; outline: none;
+  }
+  .copy-area textarea:focus { border-color: var(--accent); }
+  .copy-hint { font-family: 'IBM Plex Mono',monospace; font-size: 10px; color: var(--overlay0); text-align: center; }
+
+  .stats-bar {
+    background: var(--mantle); padding: 8px 24px; border-top: 1px solid var(--border);
+    display: flex; gap: 24px; flex-wrap: wrap;
+    font-family: 'IBM Plex Mono',monospace; font-size: 11px; color: var(--subtext);
+  }
+  .stat { display: flex; gap: 6px; }
+  .stat-val { color: var(--green); }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--surface1); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <!-- Inline SVG favicon in header — auto theme -->
+    <svg class="logo-icon" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+      <rect width="32" height="32" rx="7" fill="var(--surface0)"/>
+      <rect x="12" y="4" width="8" height="13" rx="4" fill="var(--accent)"/>
+      <path d="M8 16 Q8 23 16 23 Q24 23 24 16" fill="none" stroke="var(--mauve)" stroke-width="2" stroke-linecap="round"/>
+      <line x1="16" y1="23" x2="16" y2="27" stroke="var(--mauve)" stroke-width="2" stroke-linecap="round"/>
+      <line x1="11" y1="27" x2="21" y2="27" stroke="var(--mauve)" stroke-width="2" stroke-linecap="round"/>
+      <circle cx="26" cy="13"   r="1.2" fill="var(--green)" opacity="0.9"/>
+      <circle cx="29" cy="13"   r="1.2" fill="var(--green)" opacity="0.5"/>
+      <circle cx="26" cy="16.5" r="1.2" fill="var(--green)" opacity="0.7"/>
+      <circle cx="29" cy="16.5" r="1.2" fill="var(--green)" opacity="0.35"/>
+    </svg>
+    ai<span>-</span>whisper
+  </div>
+  <div class="header-right">
+    <div class="theme-btns">
+      <button class="theme-btn" onclick="setTheme('light')">☀ latte</button>
+      <button class="theme-btn" onclick="setTheme('auto')">⟳ auto</button>
+      <button class="theme-btn" onclick="setTheme('dark')">☽ mocha</button>
+    </div>
+    <div class="status-label" id="statusLabel">connecting...</div>
+    <div class="status-dot" id="statusDot"></div>
+  </div>
+</header>
+
+<main>
+  <!-- ── Left Panel ── -->
+  <div class="panel-left">
+
+    <div class="section">
+      <div class="section-label">Server</div>
+      <input type="text" id="serverUrl" placeholder="http://192.168.x.x:8082">
+    </div>
+
+    <div class="section">
+      <div class="section-label">Model</div>
+      <select id="modelSelect">
+        <option value="default">Loading...</option>
+      </select>
+      <div class="model-hint" id="modelHint">Fetching model list from server...</div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Input</div>
+      <div class="drop-zone" id="dropZone">
+        <input type="file" id="fileInput" accept="audio/*,video/*,.wav,.mp3,.ogg,.flac,.mp4,.mov,.mkv,.webm,.m4a">
+        <div class="drop-icon">🎙</div>
+        <div class="drop-text"><strong>Drop audio or video</strong><br>or click to browse</div>
+        <div class="file-name" id="fileName"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Options</div>
+
+      <div class="opt-row">
+        <div><div class="opt-label">Language</div><div class="opt-sub">Source language</div></div>
+        <select id="langSelect" style="width:auto;min-width:130px">
+          <option value="auto">auto-detect</option>
+          <option value="ar" selected>Arabic (ar)</option>
+          <option value="en">English (en)</option>
+          <option value="fr">French (fr)</option>
+          <option value="de">German (de)</option>
+          <option value="es">Spanish (es)</option>
+          <option value="it">Italian (it)</option>
+          <option value="ja">Japanese (ja)</option>
+          <option value="zh">Chinese (zh)</option>
+          <option value="ru">Russian (ru)</option>
+          <option value="pt">Portuguese (pt)</option>
+          <option value="tr">Turkish (tr)</option>
+          <option value="ko">Korean (ko)</option>
+          <option value="nl">Dutch (nl)</option>
+          <option value="fa">Persian (fa)</option>
+          <option value="uk">Ukrainian (uk)</option>
+        </select>
+      </div>
+
+      <div class="opt-row">
+        <div><div class="opt-label">Translate → English</div><div class="opt-sub">Output in English</div></div>
+        <label class="toggle"><input type="checkbox" id="translateToggle"><div class="toggle-track"></div></label>
+      </div>
+
+      <div class="opt-row">
+        <div><div class="opt-label">Timestamps</div><div class="opt-sub">Show segment times</div></div>
+        <label class="toggle"><input type="checkbox" id="timestampToggle" checked><div class="toggle-track"></div></label>
+      </div>
+
+      <div class="opt-row">
+        <div><div class="opt-label">Output format</div></div>
+        <select id="formatSelect" style="width:auto;min-width:130px">
+          <option value="srt" selected>SRT subtitles</option>
+          <option value="verbose_json">Segments (JSON)</option>
+          <option value="text">Plain text</option>
+          <option value="vtt">VTT subtitles</option>
+        </select>
+      </div>
+
+      <div class="opt-row">
+        <div><div class="opt-label">Max line length</div><div class="opt-sub">Chars per SRT line</div></div>
+        <input type="number" id="maxLineLen" value="42" min="20" max="120" style="width:auto;min-width:70px;text-align:center">
+      </div>
+    </div>
+
+    <div class="section">
+      <button class="btn-run" id="runBtn" disabled>▶ Transcribe</button>
+    </div>
+
+  </div>
+
+  <!-- ── Right Panel ── -->
+  <div class="panel-right">
+    <div class="output-header">
+      <div class="output-title" id="outputTitle">Output</div>
+      <div class="output-actions">
+        <button class="btn-sm hi" id="downloadBtn" style="display:none">↓ Download</button>
+        <button class="btn-sm"    id="copyBtn"     style="display:none">⎘ Copy</button>
+        <button class="btn-sm"    id="clearBtn"    style="display:none">Clear</button>
+      </div>
+    </div>
+
+    <div class="progress-bar-wrap" id="progressBar">
+      <div class="progress-bar-fill"></div>
+    </div>
+
+    <div class="output-body" id="outputBody">
+      <div class="empty-state">
+        <div class="empty-icon">◎</div>
+        <div class="empty-text">drop a file and hit transcribe</div>
+      </div>
+    </div>
+
+    <div class="stats-bar" id="statsBar" style="display:none">
+      <div class="stat">duration <span class="stat-val" id="statDuration">—</span></div>
+      <div class="stat">segments <span class="stat-val" id="statSegments">—</span></div>
+      <div class="stat">time     <span class="stat-val" id="statTime">—</span></div>
+      <div class="stat">lang     <span class="stat-val" id="statLang">—</span></div>
+      <div class="stat">model    <span class="stat-val" id="statModel">—</span></div>
+    </div>
+  </div>
+</main>
+
+<!-- Copy fallback for HTTP (non-secure context) -->
+<div class="copy-area" id="copyArea">
+  <div class="copy-area-header">
+    <div class="copy-area-title">Select all → Ctrl+A, then copy → Ctrl+C</div>
+    <button class="btn-close" onclick="closeCopyArea()">✕</button>
+  </div>
+  <textarea id="copyTextarea" readonly></textarea>
+  <div class="copy-hint">Clipboard API requires HTTPS. This fallback works from any device.</div>
+</div>
+
+<script>
+// ── Theme ──────────────────────────────────────────────
+let currentTheme = localStorage.getItem('w-theme') || 'auto';
+const setTheme = (t) => {
+  currentTheme = t;
+  localStorage.setItem('w-theme', t);
+  document.documentElement[t === 'auto' ? 'removeAttribute' : 'setAttribute']('data-theme', t);
+  document.querySelectorAll('.theme-btn').forEach(b => {
+    b.classList.toggle('active',
+      (t==='auto'  && b.textContent.includes('⟳')) ||
+      (t==='light' && b.textContent.includes('☀')) ||
+      (t==='dark'  && b.textContent.includes('☽'))
+    );
+  });
+};
+setTheme(currentTheme);
+
+// ── Refs ───────────────────────────────────────────────
+const $ = id => document.getElementById(id);
+const serverUrl    = $('serverUrl');
+const statusDot    = $('statusDot');
+const statusLabel  = $('statusLabel');
+const dropZone     = $('dropZone');
+const fileInput    = $('fileInput');
+const fileNameEl   = $('fileName');
+const runBtn       = $('runBtn');
+const outputBody   = $('outputBody');
+const progressBar  = $('progressBar');
+const copyBtn      = $('copyBtn');
+const downloadBtn  = $('downloadBtn');
+const clearBtn     = $('clearBtn');
+const statsBar     = $('statsBar');
+const modelSelect  = $('modelSelect');
+const modelHint    = $('modelHint');
+const copyArea     = $('copyArea');
+const copyTextarea = $('copyTextarea');
+
+// ── State ──────────────────────────────────────────────
+let selectedFile = null;
+let rawText      = null;   // raw server string (SRT/VTT/plain)
+let rawJson      = null;   // parsed JSON
+let lastFormat   = 'srt';
+
+// ── Server URL ─────────────────────────────────────────
+serverUrl.value = localStorage.getItem('w-server') ||
+  `http://${window.location.hostname}:${window.location.port || '8082'}`;
+
+serverUrl.addEventListener('change', () => {
+  localStorage.setItem('w-server', serverUrl.value.trim());
+  checkServer();
+  loadModels();
+});
+
+// ── Status ─────────────────────────────────────────────
+const setStatus = (state, label) => {
+  statusDot.className = `status-dot ${state}`;
+  statusLabel.textContent = label;
+};
+
+// ── Server health check ────────────────────────────────
+const checkServer = async () => {
+  try {
+    await fetch(`${serverUrl.value}/`, { signal: AbortSignal.timeout(4000) });
+    setStatus('ready', 'ready');
+  } catch {
+    setStatus('error', 'unreachable');
+  }
+};
+
+// ── Load models from models.json ───────────────────────
+const loadModels = async () => {
+  modelHint.textContent = 'Fetching model list...';
+  try {
+    const r = await fetch(`${serverUrl.value}/models.json?_=${Date.now()}`,
+      { signal: AbortSignal.timeout(4000) });
+
+    if (!r.ok) throw new Error('not found');
+    const data = await r.json();
+    const models = data.models || [];
+
+    if (!models.length) throw new Error('empty');
+
+    modelSelect.innerHTML = '';
+    models.forEach(m => {
+      const name = typeof m === 'string' ? m : m.name;
+      const isDefault = typeof m === 'object' && m.default;
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      if (isDefault) opt.selected = true;
+      modelSelect.appendChild(opt);
+    });
+
+    // Restore saved selection if it still exists
+    const saved = localStorage.getItem('w-model');
+    if (saved) {
+      const found = [...modelSelect.options].find(o => o.value === saved);
+      if (found) modelSelect.value = saved;
+    }
+
+    modelHint.textContent = `${models.length} model${models.length > 1 ? 's' : ''} available`;
+    $('statModel').textContent = modelSelect.value;
+
+  } catch {
+    // Server up but no models.json yet — show a single "server default" option
+    modelSelect.innerHTML = '<option value="default">Server default model</option>';
+    modelHint.textContent = 'Start server with whisper.sh to populate this list';
+  }
+};
+
+modelSelect.addEventListener('change', () => {
+  localStorage.setItem('w-model', modelSelect.value);
+  $('statModel').textContent = modelSelect.value;
+});
+
+// ── Init ───────────────────────────────────────────────
+checkServer();
+loadModels();
+setInterval(checkServer, 15000);
+
+// ── File handling ──────────────────────────────────────
+const setFile = (file) => {
+  selectedFile = file;
+  fileNameEl.textContent = file.name;
+  fileNameEl.style.display = 'block';
+  dropZone.querySelector('.drop-text').style.display = 'none';
+  runBtn.disabled = false;
+};
+
+fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', ()  => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+});
+
+// ── Transcribe ─────────────────────────────────────────
+runBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+
+  const lang      = $('langSelect').value;
+  const translate = $('translateToggle').checked;
+  const noTs      = !$('timestampToggle').checked;
+  const format    = $('formatSelect').value;
+  lastFormat      = format;
+  rawText = null; rawJson = null;
+
+  const fd = new FormData();
+  fd.append('file', selectedFile, selectedFile.name);
+  fd.append('response_format', format);
+  if (lang !== 'auto') fd.append('language', lang);
+  if (translate)       fd.append('translate', 'true');
+  if (noTs)            fd.append('no_timestamps', 'true');
+
+  runBtn.disabled = true;
+  runBtn.textContent = '⏳ Processing...';
+  progressBar.style.display = 'block';
+  setStatus('working', 'processing');
+  outputBody.innerHTML = '';
+  statsBar.style.display = 'none';
+  [copyBtn, downloadBtn, clearBtn].forEach(b => b.style.display = 'none');
+  closeCopyArea();
+  const t0 = Date.now();
+
+  try {
+    const res = await fetch(`${serverUrl.value}/inference`, { method: 'POST', body: fd });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`HTTP ${res.status}${errText ? ' — ' + errText.slice(0,300) : ''}`);
+    }
+
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    const ct = res.headers.get('content-type') || '';
+
+    if (format === 'verbose_json' || ct.includes('json')) {
+      rawJson = await res.json();
+      rawText = null;
+      renderSegments(rawJson, elapsed, lang);
+    } else {
+      rawText = await res.text();
+      rawJson = null;
+      if (format === 'srt') renderSRT(rawText, elapsed, lang);
+      else                   renderPlain(rawText, elapsed, lang);
+    }
+
+    setStatus('ready', 'ready');
+
+  } catch (err) {
+    outputBody.innerHTML = `<div class="error-msg">
+      ⚠ ${escHtml(err.message)}<br><br>
+      Server: <strong>${serverUrl.value}</strong><br><br>
+      Make sure server is running with <code>--convert</code> flag.
+    </div>`;
+    setStatus('error', 'error');
+  } finally {
+    progressBar.style.display = 'none';
+    runBtn.disabled = false;
+    runBtn.textContent = '▶ Transcribe';
+  }
+});
+
+// ── Render: SRT ────────────────────────────────────────
+const renderSRT = (srtRaw, elapsed, lang) => {
+  if (!srtRaw || !srtRaw.trim()) {
+    outputBody.innerHTML = '<div class="empty-state"><div class="empty-text">no speech detected</div></div>';
+    return;
+  }
+  const maxLen = parseInt($('maxLineLen').value) || 42;
+  const blocks = srtRaw.trim().split(/\n\s*\n/).filter(b => b.trim());
+  const wrap = document.createElement('div');
+  let count = 0;
+
+  blocks.forEach(block => {
+    const lines = block.trim().split('\n');
+    let idx = '', timeLine = '', textLines = [];
+    lines.forEach(l => {
+      if (/^\d+$/.test(l.trim()) && !timeLine) idx = l.trim();
+      else if (l.includes('-->') && !timeLine)  timeLine = l.trim();
+      else textLines.push(l);
+    });
+    if (!timeLine) return;
+    const txt = textLines.join(' ').trim();
+    if (!txt) return;
+    count++;
+    const arabic = isArabic(txt);
+    const wrapped = wrapText(txt, maxLen, arabic);
+    const div = document.createElement('div');
+    div.className = 'srt-block';
+    div.innerHTML = `
+      <div class="srt-index">#${escHtml(idx)}</div>
+      <div class="srt-time">${escHtml(timeLine)}</div>
+      <div class="srt-text${arabic?' rtl':''}">${escHtml(wrapped).replace(/\n/g,'<br>')}</div>`;
+    wrap.appendChild(div);
+  });
+
+  outputBody.appendChild(wrap);
+  $('outputTitle').textContent  = 'SRT Output';
+  $('statDuration').textContent = extractSRTDuration(blocks);
+  $('statSegments').textContent = count;
+  $('statTime').textContent     = elapsed + 's';
+  $('statLang').textContent     = lang !== 'auto' ? lang : 'auto';
+  $('statModel').textContent    = modelSelect.value;
+  statsBar.style.display = 'flex';
+  showActions();
+};
+
+// ── Render: verbose_json ───────────────────────────────
+const renderSegments = (data, elapsed, lang) => {
+  const segs = data.segments || [];
+  const detLang = data.language || (lang !== 'auto' ? lang : '—');
+  if (!segs.length) {
+    outputBody.innerHTML = '<div class="empty-state"><div class="empty-text">no speech detected</div></div>';
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'segments';
+  segs.forEach(s => {
+    const txt = (s.text || '').trim();
+    const row = document.createElement('div');
+    row.className = 'segment';
+    row.innerHTML = `
+      <div class="seg-time">${fmtTime(s.t0??s.start??0)} → ${fmtTime(s.t1??s.end??0)}</div>
+      <div class="seg-text${isArabic(txt)?' rtl':''}">${escHtml(txt)}</div>`;
+    wrap.appendChild(row);
+  });
+  outputBody.appendChild(wrap);
+  $('outputTitle').textContent  = 'Segments';
+  const last = segs[segs.length - 1];
+  $('statDuration').textContent = fmtTime(last?.t1 ?? last?.end ?? 0);
+  $('statSegments').textContent = segs.length;
+  $('statTime').textContent     = elapsed + 's';
+  $('statLang').textContent     = detLang;
+  $('statModel').textContent    = modelSelect.value;
+  statsBar.style.display = 'flex';
+  showActions();
+};
+
+// ── Render: plain ──────────────────────────────────────
+const renderPlain = (text, elapsed, lang) => {
+  const pre = document.createElement('pre');
+  pre.className = 'plain-text';
+  pre.textContent = text;
+  outputBody.appendChild(pre);
+  $('outputTitle').textContent  = 'Transcript';
+  $('statTime').textContent     = elapsed + 's';
+  $('statLang').textContent     = lang !== 'auto' ? lang : 'auto';
+  ['statDuration','statSegments'].forEach(id => $(id).textContent = '—');
+  $('statModel').textContent    = modelSelect.value;
+  statsBar.style.display = 'flex';
+  showActions();
+};
+
+// ── Actions ────────────────────────────────────────────
+const showActions = () => [copyBtn, downloadBtn, clearBtn].forEach(b => b.style.display = 'block');
+
+// Copy — HTTPS uses clipboard API, HTTP shows fallback textarea
+copyBtn.addEventListener('click', () => {
+  const text = getOutputText();
+  if (!text) return;
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => {
+      copyBtn.textContent = '✓ Copied';
+      setTimeout(() => { copyBtn.textContent = '⎘ Copy'; }, 1800);
+    }).catch(() => showCopyFallback(text));
+  } else {
+    showCopyFallback(text);
+  }
+});
+
+const showCopyFallback = (text) => {
+  copyTextarea.value = text;
+  copyArea.style.display = 'flex';
+  // Select all text automatically
+  copyTextarea.focus();
+  copyTextarea.select();
+};
+const closeCopyArea = () => { copyArea.style.display = 'none'; };
+
+// Download
+downloadBtn.addEventListener('click', () => {
+  const text = getOutputText();
+  if (!text) return;
+  const ext  = lastFormat === 'srt' ? 'srt' : lastFormat === 'vtt' ? 'vtt' : 'txt';
+  const base = selectedFile ? selectedFile.name.replace(/\.[^.]+$/, '') : 'transcript';
+  // For SRT: rebuild with wrapped lines for clean file
+  const finalText = (lastFormat === 'srt' && rawText)
+    ? buildWrappedSRT(rawText, parseInt($('maxLineLen').value) || 42)
+    : text;
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([finalText], { type: 'text/plain;charset=utf-8' })),
+    download: `${base}.${ext}`
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+clearBtn.addEventListener('click', () => {
+  outputBody.innerHTML = '<div class="empty-state"><div class="empty-icon">◎</div><div class="empty-text">drop a file and hit transcribe</div></div>';
+  statsBar.style.display = 'none';
+  $('outputTitle').textContent = 'Output';
+  [copyBtn, downloadBtn, clearBtn].forEach(b => b.style.display = 'none');
+  rawText = null; rawJson = null;
+  closeCopyArea();
+});
+
+// ── Get output as text ─────────────────────────────────
+const getOutputText = () => {
+  if (rawText !== null) return rawText;
+  if (rawJson !== null) {
+    const segs = rawJson.segments || [];
+    return segs.length
+      ? segs.map(s => {
+          const t0 = fmtTimeSRT(s.t0 ?? s.start ?? 0);
+          const t1 = fmtTimeSRT(s.t1 ?? s.end   ?? 0);
+          return `${t0} → ${t1}\n${(s.text||'').trim()}`;
+        }).join('\n\n')
+      : JSON.stringify(rawJson, null, 2);
+  }
+  return '';
+};
+
+// ── Build clean wrapped SRT for download ───────────────
+const buildWrappedSRT = (srtRaw, maxLen) => {
+  const blocks = srtRaw.trim().split(/\n\s*\n/).filter(b => b.trim());
+  return blocks.map(block => {
+    const lines = block.trim().split('\n');
+    let idx = '', timeLine = '', textLines = [];
+    lines.forEach(l => {
+      if (/^\d+$/.test(l.trim()) && !timeLine) idx = l.trim();
+      else if (l.includes('-->') && !timeLine)  timeLine = l.trim();
+      else textLines.push(l);
+    });
+    const txt = textLines.join(' ').trim();
+    return `${idx}\n${timeLine}\n${wrapText(txt, maxLen, isArabic(txt))}`;
+  }).join('\n\n') + '\n';
+};
+
+// ── Word wrap — Arabic safe ────────────────────────────
+const wrapText = (text, maxLen, isRTL) => {
+  if (!text || text.length <= maxLen) return text;
+  const words = text.split(' ');
+  const lines = []; let cur = '';
+  for (const w of words) {
+    const candidate = cur ? cur + ' ' + w : w;
+    if (candidate.length <= maxLen) {
+      cur = candidate;
+    } else {
+      if (cur) lines.push(cur);
+      cur = w; // keep word whole — never break mid-word (Arabic or LTR)
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.join('\n');
+};
+
+// ── SRT last timestamp ─────────────────────────────────
+const extractSRTDuration = (blocks) => {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const m = blocks[i].match(/-->\s*(\d{2}:\d{2}:\d{2}[,\.]\d{3})/);
+    if (m) return m[1].replace(',', '.');
+  }
+  return '—';
+};
+
+// ── Helpers ────────────────────────────────────────────
+const isArabic  = t => /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(t);
+
+const fmtTime = (t) => {
+  const sec = typeof t === 'number' ? t / 100 : 0;
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60), cs=Math.floor((sec%1)*100);
+  return h>0 ? `${h}:${pad(m)}:${pad(s)}.${pad(cs)}` : `${pad(m)}:${pad(s)}.${pad(cs)}`;
+};
+
+const fmtTimeSRT = (t) => {
+  const sec = typeof t === 'number' ? t / 100 : 0;
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60), ms=Math.floor((sec%1)*1000);
+  return `${pad(h)}:${pad(m)}:${pad(s)},${String(ms).padStart(3,'0')}`;
+};
+
+const pad     = n => String(n).padStart(2,'0');
+const escHtml = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+</script>
+</body>
+</html>

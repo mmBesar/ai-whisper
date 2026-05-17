@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Light background: Catppuccin Latte base -->
+  <rect width="32" height="32" rx="7" fill="#eff1f5"/>
+
+  <!-- Microphone body -->
+  <rect x="12" y="4" width="8" height="13" rx="4" fill="#1e66f5"/>
+
+  <!-- Microphone stand arc -->
+  <path d="M8 16 Q8 23 16 23 Q24 23 24 16"
+        fill="none" stroke="#8839ef" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Stand pole -->
+  <line x1="16" y1="23" x2="16" y2="27"
+        stroke="#8839ef" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Base -->
+  <line x1="11" y1="27" x2="21" y2="27"
+        stroke="#8839ef" stroke-width="2" stroke-linecap="round"/>
+
+  <!-- Sound wave dots — right side -->
+  <circle cx="26" cy="13" r="1.2" fill="#40a02b" opacity="0.9"/>
+  <circle cx="29" cy="13" r="1.2" fill="#40a02b" opacity="0.5"/>
+  <circle cx="26" cy="16.5" r="1.2" fill="#40a02b" opacity="0.7"/>
+  <circle cx="29" cy="16.5" r="1.2" fill="#40a02b" opacity="0.35"/>
+</svg>
