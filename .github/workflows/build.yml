@@ -1,6 +1,5 @@
 name: Build Portable Binaries
 
-# Trigger on version tags or manually
 on:
   push:
     tags:
@@ -10,9 +9,10 @@ on:
 permissions:
   contents: write
 
-# ── NOTE: RISC-V native runner requires the RISE GitHub App ─────────────────
-# Install from: https://riseproject.dev/risc-v-runners/
-# Then runs-on: ubuntu-24.04-riscv works with real RISC-V hardware — no QEMU
+# ── RISC-V64 note ────────────────────────────────────────────────────────────
+# riscv64 builds via QEMU on ubuntu-24.04 — slow but works.
+# When RISE native runners become available (riseproject.dev),
+# change riscv64 runner to: ubuntu-24.04-riscv and remove the QEMU setup step.
 # ────────────────────────────────────────────────────────────────────────────
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
       - name: Clone whisper.cpp
         run: git clone --depth=1 https://github.com/ggml-org/whisper.cpp
 
-      - name: Build (Vulkan, no ffmpeg linkage)
+      - name: Build — Vulkan, no ffmpeg linkage
         run: |
           cd whisper.cpp
           cmake -B build \
@@ -45,11 +45,11 @@ jobs:
             -G Ninja
           cmake --build build --config Release
 
-      - name: Verify — no ffmpeg deps, check GLIBC floor
+      - name: Verify — no ffmpeg deps, show GLIBC floor
         run: |
           echo "=== ffmpeg linkage (must be empty) ==="
           ldd whisper.cpp/build/bin/whisper-cli | grep libav || echo "✓ clean"
-          echo "=== GLIBC requirement ==="
+          echo "=== GLIBC floor ==="
           objdump -T whisper.cpp/build/bin/whisper-cli 2>/dev/null | \
             grep -oP 'GLIBC_\K[0-9.]+' | sort -V | tail -1 | \
             xargs -I{} echo "Requires GLIBC {}"
@@ -109,19 +109,16 @@ jobs:
           case $CPU in
             0xd81)
               echo "MARCH=-march=armv9-a+sve+sve2+i8mm+bf16" >> $GITHUB_ENV
-              echo "BIN_SUBDIR=a720" >> $GITHUB_ENV
-              ;;
+              echo "BIN_SUBDIR=a720" >> $GITHUB_ENV ;;
             0xd0b)
               echo "MARCH=-march=armv8.2-a+dotprod+fp16+i8mm" >> $GITHUB_ENV
-              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV
-              ;;
+              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV ;;
             *)
               echo "MARCH=-march=armv8-a" >> $GITHUB_ENV
-              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV
-              ;;
+              echo "BIN_SUBDIR=a76" >> $GITHUB_ENV ;;
           esac
 
-      - name: Build (Vulkan, no ffmpeg linkage)
+      - name: Build — Vulkan, no ffmpeg linkage
         run: |
           cd whisper.cpp
           cmake -B build \
@@ -162,61 +159,54 @@ jobs:
           path: dist/
           compression-level: 6
 
-  # ── RISC-V64 native hardware via RISE runners ─────────────────────────────
-  # Requires: install RISE GitHub App from https://riseproject.dev/risc-v-runners/
-  # runs-on: ubuntu-24.04-riscv uses real RISC-V bare-metal — no QEMU
+  # ── RISC-V64 via QEMU ────────────────────────────────────────────────────
+  # Using uraimo/run-on-arch-action — builds inside a real riscv64 container
+  # via QEMU. Slow but produces a correct native riscv64 binary.
+  # Switch to runs-on: ubuntu-24.04-riscv when RISE waitlist clears.
   build-riscv64:
-    name: RISC-V64 — CPU (RISE native runner)
-    runs-on: ubuntu-24.04-riscv
+    name: RISC-V64 — CPU (QEMU)
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install build deps
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            build-essential cmake ninja-build git \
-            libdrm-dev pkg-config
+      - name: Build inside RISC-V64 container via QEMU
+        uses: uraimo/run-on-arch-action@v3
+        with:
+          arch: riscv64
+          distro: ubuntu24.04
+          githubToken: ${{ github.token }}
+          dockerRunArgs: --volume "${PWD}/dist:/dist"
+          install: |
+            apt-get update -qq
+            apt-get install -y --no-install-recommends \
+              build-essential cmake ninja-build git \
+              libdrm-dev pkg-config
+          run: |
+            git clone --depth=1 https://github.com/ggml-org/whisper.cpp
+            cd whisper.cpp
+            cmake -B build \
+              -DGGML_VULKAN=OFF \
+              -DWHISPER_FFMPEG=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -G Ninja
+            cmake --build build --config Release
+            mkdir -p /dist/bin/riscv64/cpu
+            cp build/bin/whisper-cli    /dist/bin/riscv64/cpu/
+            cp build/bin/whisper-server  /dist/bin/riscv64/cpu/
+            cp build/ggml/src/libggml*.so*  /dist/bin/riscv64/cpu/
+            cp build/src/libwhisper*.so*    /dist/bin/riscv64/cpu/
+            strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-cli
+            strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-server
+            echo "=== Built binary ===" && file /dist/bin/riscv64/cpu/whisper-cli
 
-      - name: Clone whisper.cpp
-        run: git clone --depth=1 https://github.com/ggml-org/whisper.cpp
-
-      - name: Build (CPU only — no Vulkan driver on RISC-V yet)
-        run: |
-          cd whisper.cpp
-          cmake -B build \
-            -DGGML_VULKAN=OFF \
-            -DWHISPER_FFMPEG=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -G Ninja
-          cmake --build build --config Release
-
-      - name: Verify architecture
-        run: |
-          file whisper.cpp/build/bin/whisper-cli
-          uname -m
-
-      - name: Collect binaries and libs
-        run: |
-          mkdir -p dist/bin/riscv64/cpu
-          cp whisper.cpp/build/bin/whisper-cli    dist/bin/riscv64/cpu/
-          cp whisper.cpp/build/bin/whisper-server  dist/bin/riscv64/cpu/
-          cp whisper.cpp/build/ggml/src/libggml*.so* dist/bin/riscv64/cpu/
-          cp whisper.cpp/build/src/libwhisper*.so*   dist/bin/riscv64/cpu/
-          strip --strip-unneeded dist/bin/riscv64/cpu/whisper-cli
-          strip --strip-unneeded dist/bin/riscv64/cpu/whisper-server
-          ls -lh dist/bin/riscv64/cpu/
-
-      # No static ffmpeg for riscv64 from johnvansickle yet
-      # whisper.sh will fall back to system ffmpeg on riscv64
       - name: Note about ffmpeg on riscv64
         run: |
           mkdir -p dist/bin/riscv64
           cat > dist/bin/riscv64/ffmpeg.note << 'EOF'
           No static ffmpeg binary available for riscv64 yet.
           Install system ffmpeg: sudo apt install ffmpeg
-          whisper.sh will use system ffmpeg automatically.
+          whisper.sh detects this and falls back to system ffmpeg automatically.
           EOF
 
       - uses: actions/upload-artifact@v7
@@ -244,19 +234,18 @@ jobs:
         run: |
           mkdir -p release/ai-whisper
 
-          # Merge all arch builds into one folder
+          # Merge all arch builds
           for arch in amd64 arm64 riscv64; do
             if [ -d "all-artifacts/ai-whisper-$arch" ]; then
               cp -r all-artifacts/ai-whisper-$arch/. release/ai-whisper/
             fi
           done
 
-          # Copy project files
-          cp whisper.sh        release/ai-whisper/
-          cp -r public/        release/ai-whisper/public/
-          cp -r samples/       release/ai-whisper/samples/ 2>/dev/null || true
-          cp README.md         release/ai-whisper/ 2>/dev/null || true
-
+          # Copy project files from repo
+          cp whisper.sh              release/ai-whisper/
+          cp -r public/              release/ai-whisper/public/
+          cp -r samples/             release/ai-whisper/samples/ 2>/dev/null || true
+          cp README.md               release/ai-whisper/ 2>/dev/null || true
           chmod +x release/ai-whisper/whisper.sh
 
           echo "=== Release structure ==="
@@ -288,20 +277,20 @@ jobs:
 
             ### Architectures included
 
-            | Target | Backend | Runner |
+            | Target | Backend | Built on |
             |---|---|---|
-            | `bin/amd64/vulkan/` | Vulkan GPU | `ubuntu-24.04` |
+            | `bin/amd64/vulkan/` | Vulkan GPU | `ubuntu-24.04` native |
             | `bin/amd64/ffmpeg`  | Static ffmpeg | bundled |
-            | `bin/arm64/vulkan/` | Vulkan GPU | `ubuntu-24.04-arm` native |
+            | `bin/arm64/a720/`   | Vulkan GPU | `ubuntu-24.04-arm` native |
+            | `bin/arm64/a76/`    | Vulkan GPU | `ubuntu-24.04-arm` native |
             | `bin/arm64/ffmpeg`  | Static ffmpeg | bundled |
-            | `bin/riscv64/cpu/` | CPU only | `ubuntu-24.04-riscv` native (RISE) |
+            | `bin/riscv64/cpu/` | CPU only | QEMU |
 
             ### Requirements
             - GLIBC 2.39+ (Ubuntu 24.04+, Debian 13+, Fedora 40+)
-            - Vulkan GPU driver for GPU acceleration
-            - Models not included — [download separately](#models)
+            - Models not included — download separately
 
-            ### Models
+            ### Download a model
             ```bash
             mkdir -p models
             wget -c https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin \
