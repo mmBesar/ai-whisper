@@ -107,7 +107,7 @@ COPY --from=builder /dist/bin/ /app/bin/
 
 # Copy web UI and samples
 COPY public/ /app/public/
-COPY samples/ /app/samples/
+#COPY samples/ /app/samples/
 COPY docker-entrypoint.sh /app/
 
 RUN chmod +x /app/docker-entrypoint.sh
