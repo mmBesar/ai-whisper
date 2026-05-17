@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # ─────────────────────────────────────────────────────
-# ai-whisper — Auto-detect launcher v4
-# Supports: x86_64 Vulkan (AMD/Intel), x86_64 CPU, aarch64 A720, A76
+# ai-whisper — Auto-detect launcher v5
+# Supports: x86_64 Vulkan (AMD/Intel), x86_64 CPU, aarch64 A720, A76, riscv64
 # Tasks   : transcribe, translate (Arabic→English), SRT subtitles, server
 # ─────────────────────────────────────────────────────
 
@@ -18,29 +18,41 @@ if [[ "$ARCH" == "x86_64" ]]; then
     if [[ -f "$SCRIPT_DIR/bin/amd64/vulkan/whisper-cli" ]]; then
         BIN="$SCRIPT_DIR/bin/amd64/vulkan"
         BACKEND="Vulkan GPU"
+        WANTS_GPU=1
     elif [[ -f "$SCRIPT_DIR/bin/amd64/cpu/whisper-cli" ]]; then
         BIN="$SCRIPT_DIR/bin/amd64/cpu"
         BACKEND="CPU only"
+        WANTS_GPU=0
     else
         echo "  Error: No x86_64 binaries found in $SCRIPT_DIR/bin/amd64/"
         exit 1
     fi
+
 elif [[ "$ARCH" == "aarch64" ]]; then
     CPU=$(grep "CPU part" /proc/cpuinfo | head -1 | awk '{print $NF}')
     case $CPU in
       0xd81)
         BIN="$SCRIPT_DIR/bin/arm64/a720"
         CPU_NAME="Cortex-A720 (Orange Pi 6 Plus) — $THREADS cores"
-        BACKEND="Vulkan GPU" ;;
+        BACKEND="Vulkan GPU"
+        WANTS_GPU=1 ;;
       0xd0b)
         BIN="$SCRIPT_DIR/bin/arm64/a76"
         CPU_NAME="Cortex-A76 (RK3588 / Raspberry Pi 5) — $THREADS cores"
-        BACKEND="CPU only" ;;
+        BACKEND="Vulkan GPU"
+        WANTS_GPU=1 ;;
       *)
         BIN="$SCRIPT_DIR/bin/arm64/a76"
         CPU_NAME="Unknown ARM64 — using A76 build — $THREADS cores"
-        BACKEND="CPU only" ;;
+        BACKEND="Vulkan GPU"
+        WANTS_GPU=1 ;;
     esac
+
+elif [[ "$ARCH" == "riscv64" ]]; then
+    CPU_NAME="RISC-V64 — $(grep -m1 'Model' /proc/cpuinfo | cut -d: -f2 | xargs 2>/dev/null || echo 'unknown')"
+    BIN="$SCRIPT_DIR/bin/riscv64/cpu"
+    BACKEND="CPU only"
+    WANTS_GPU=0
 else
     echo "  Error: Unsupported architecture: $ARCH"
     exit 1
@@ -56,110 +68,134 @@ detect_pkg_manager() {
     fi
 }
 
-# ── Try to create version-agnostic symlinks ───────────
-# When binary needs libfoo.so.62 but system has libfoo.so.61,
-# create a symlink libfoo.so.62 -> /usr/lib/.../libfoo.so.61 in our BIN dir
-create_compat_symlinks() {
-    local needed_lib="$1"   # e.g. libavformat.so.62
-    local base_name="${needed_lib%%.*}"  # e.g. libavformat
-
-    # Already in our bundle?
-    [[ -f "$BIN/$needed_lib" || -L "$BIN/$needed_lib" ]] && return 0
-
-    # Search system for any version of this library
-    local system_lib
-    system_lib=$(ldconfig -p 2>/dev/null | grep "${base_name}\.so\." | \
-                 awk '{print $NF}' | head -1)
-
-    if [[ -n "$system_lib" && -f "$system_lib" ]]; then
-        ln -sf "$system_lib" "$BIN/$needed_lib" 2>/dev/null && \
-            echo "  compat:  $needed_lib → $system_lib" && return 0
-    fi
-    return 1
-}
-
-# ── Check and fix dependencies ────────────────────────
+# ── Check dependencies ────────────────────────────────
 check_deps() {
-    # Get truly missing libs — filter out filename lines from ldd output
     local missing
     missing=$(LD_LIBRARY_PATH="$BIN" ldd "$BIN/whisper-cli" 2>/dev/null | \
-              grep "not found" | \
-              grep -v "^/" | \
-              awk '{print $1}')
-
+              grep "not found" | grep -v "^/" | awk '{print $1}')
     [[ -z "$missing" ]] && return 0
 
-    # First pass: try to create symlinks for version mismatches
-    local still_missing=""
-    while IFS= read -r lib; do
-        [[ -z "$lib" ]] && continue
-        if ! create_compat_symlinks "$lib"; then
-            still_missing="$still_missing $lib"
-        fi
-    done <<< "$missing"
-
-    still_missing=$(echo "$still_missing" | xargs)  # trim whitespace
-    [[ -z "$still_missing" ]] && return 0
-
-    # Second pass: report what truly can't be resolved
     local pm
     pm=$(detect_pkg_manager)
+    local need_ffmpeg=0 need_vulkan=0
 
     echo ""
     echo "  ⚠  Missing system libraries"
     echo "  ────────────────────────────────────"
-    for lib in $still_missing; do
+    while IFS= read -r lib; do
+        [[ -z "$lib" ]] && continue
         echo "  missing: $lib"
-    done
-    echo ""
-
-    # Suggest install commands based on what's missing
-    local need_ffmpeg=0
-    local need_vulkan=0
-    local need_x11=0
-
-    for lib in $still_missing; do
         case "$lib" in
           libav*|libsw*) need_ffmpeg=1 ;;
           libvulkan*)    need_vulkan=1 ;;
-          libX11*|libxcb*|libXext*) need_x11=1 ;;
         esac
-    done
-
-    echo "  Install the missing packages:"
+    done <<< "$missing"
     echo ""
-
+    echo "  Install:"
     case "$pm" in
       dnf)
         [[ $need_ffmpeg -eq 1 ]] && echo "    sudo dnf install ffmpeg-free"
         [[ $need_vulkan -eq 1 ]] && echo "    sudo dnf install vulkan-loader"
-        [[ $need_x11    -eq 1 ]] && echo "    sudo dnf install libX11 libxcb"
         ;;
       apt)
         [[ $need_ffmpeg -eq 1 ]] && echo "    sudo apt install ffmpeg"
-        [[ $need_vulkan -eq 1 ]] && echo "    sudo apt install libvulkan1"
-        [[ $need_x11    -eq 1 ]] && echo "    sudo apt install libx11-6 libxcb1"
+        [[ $need_vulkan -eq 1 ]] && echo "    sudo apt install libvulkan1 mesa-vulkan-drivers"
         ;;
       pacman)
         [[ $need_ffmpeg -eq 1 ]] && echo "    sudo pacman -S ffmpeg"
         [[ $need_vulkan -eq 1 ]] && echo "    sudo pacman -S vulkan-icd-loader"
-        [[ $need_x11    -eq 1 ]] && echo "    sudo pacman -S libx11 libxcb"
-        ;;
-      zypper)
-        [[ $need_ffmpeg -eq 1 ]] && echo "    sudo zypper install ffmpeg"
-        [[ $need_vulkan -eq 1 ]] && echo "    sudo zypper install libvulkan1"
-        [[ $need_x11    -eq 1 ]] && echo "    sudo zypper install libX11-6 libxcb1"
         ;;
       *)
-        echo "  Package manager not detected."
         echo "  Install ffmpeg and vulkan libraries for your distro."
         ;;
     esac
-
     echo ""
     echo "  After installing, run this script again."
     echo ""
     exit 1
+}
+
+# ── Check Vulkan GPU access ───────────────────────────
+check_vulkan() {
+    [[ $WANTS_GPU -eq 0 ]] && return 0
+
+    # Quick probe — run whisper-cli --help and check for "No devices found"
+    local probe
+    probe=$(LD_LIBRARY_PATH="$BIN" "$BIN/whisper-cli" --help 2>&1 | head -3)
+
+    if echo "$probe" | grep -q "No devices found"; then
+        echo ""
+        echo "  ⚠  Vulkan GPU not accessible — falling back to CPU"
+        echo "  ────────────────────────────────────────────────────"
+
+        # Check render group
+        if ! groups | grep -qw "render"; then
+            echo ""
+            echo "  Your user is not in the 'render' group."
+            echo "  Fix with:"
+            echo ""
+            echo "    sudo usermod -aG render \$USER"
+            echo "    # Then log out and back in, or run:"
+            echo "    newgrp render"
+            echo ""
+        fi
+
+        # Check ICD files
+        if [[ ! -d /usr/share/vulkan/icd.d ]] || \
+           [[ -z "$(ls /usr/share/vulkan/icd.d/*.json 2>/dev/null)" ]]; then
+            local pm
+            pm=$(detect_pkg_manager)
+            echo "  No Vulkan ICD drivers found."
+            echo "  Install GPU-specific Vulkan drivers:"
+            case "$pm" in
+              apt)
+                echo "    AMD:   sudo apt install mesa-vulkan-drivers"
+                echo "    Intel: sudo apt install mesa-vulkan-drivers"
+                echo "    NVIDIA: sudo apt install vulkan-tools" ;;
+              dnf)
+                echo "    AMD:   sudo dnf install mesa-vulkan-drivers"
+                echo "    Intel: sudo dnf install mesa-vulkan-drivers" ;;
+            esac
+            echo ""
+        fi
+
+        # Check /dev/dri permissions
+        if [[ -e /dev/dri/renderD128 ]]; then
+            local dri_group
+            dri_group=$(stat -c '%G' /dev/dri/renderD128 2>/dev/null)
+            if ! groups | grep -qw "$dri_group"; then
+                echo "  /dev/dri/renderD128 requires group: $dri_group"
+                echo "  Add yourself: sudo usermod -aG $dri_group \$USER"
+                echo ""
+            fi
+        fi
+
+        echo "  Continuing with CPU — GPU features unavailable."
+        echo ""
+        BACKEND="CPU only (Vulkan unavailable)"
+    fi
+}
+
+# ── Setup ffmpeg PATH ─────────────────────────────────
+# Prefer bundled static ffmpeg, fall back to system ffmpeg
+setup_ffmpeg() {
+    local ffmpeg_dir
+    if [[ "$ARCH" == "x86_64" ]]; then
+        ffmpeg_dir="$SCRIPT_DIR/bin/amd64"
+    elif [[ "$ARCH" == "aarch64" ]]; then
+        ffmpeg_dir="$SCRIPT_DIR/bin/arm64"
+    else
+        ffmpeg_dir=""
+    fi
+
+    if [[ -n "$ffmpeg_dir" && -x "$ffmpeg_dir/ffmpeg" ]]; then
+        export PATH="$ffmpeg_dir:$PATH"
+        FFMPEG_SOURCE="bundled"
+    elif command -v ffmpeg &>/dev/null; then
+        FFMPEG_SOURCE="system ($(ffmpeg -version 2>&1 | head -1 | awk '{print $3}'))"
+    else
+        FFMPEG_SOURCE="not found"
+    fi
 }
 
 # ── Detect Available RAM ──────────────────────────────
@@ -229,9 +265,14 @@ for arg in "$@"; do
     esac
 done
 
+# ── Run checks ────────────────────────────────────────
+check_deps
+check_vulkan
+setup_ffmpeg
+
 # ── Print Info ────────────────────────────────────────
 echo ""
-echo "  ai-whisper — Local Transcription v4"
+echo "  ai-whisper — Local Transcription v5"
 echo "  ────────────────────────────────────"
 echo "  CPU     : $CPU_NAME"
 echo "  Backend : $BACKEND"
@@ -239,11 +280,9 @@ echo "  RAM     : ${AVAIL_RAM_MB}MB available / ${TOTAL_RAM_MB}MB total"
 echo "  Threads : $THREADS_USE"
 echo "  Task    : $TASK"
 echo "  Lang    : $LANG"
+echo "  ffmpeg  : $FFMPEG_SOURCE"
 [[ -n "$OUTPUT_FORMAT" ]] && echo "  Output  : $OUTPUT_FORMAT"
 echo ""
-
-# ── Check + fix dependencies ──────────────────────────
-check_deps
 
 # ── RAM warning ───────────────────────────────────────
 if [[ $AVAIL_RAM_MB -lt 3000 ]]; then
@@ -277,6 +316,7 @@ echo ""
 
 if [[ ${#MODEL_LIST[@]} -eq 0 ]]; then
     echo "  Error: No models found in $MODELS_DIR"
+    echo "  Download: wget -c https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin -O models/ggml-large-v3-turbo.bin"
     exit 1
 fi
 
