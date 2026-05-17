@@ -160,9 +160,6 @@ jobs:
           compression-level: 6
 
   # ── RISC-V64 via QEMU ────────────────────────────────────────────────────
-  # Using uraimo/run-on-arch-action — builds inside a real riscv64 container
-  # via QEMU. Slow but produces a correct native riscv64 binary.
-  # Switch to runs-on: ubuntu-24.04-riscv when RISE waitlist clears.
   build-riscv64:
     name: RISC-V64 — CPU (QEMU)
     runs-on: ubuntu-24.04
@@ -177,20 +174,31 @@ jobs:
           distro: ubuntu24.04
           githubToken: ${{ github.token }}
           dockerRunArgs: --volume "${PWD}/dist:/dist"
+          # ca-certificates MUST be installed before git clone
+          # QEMU containers often lack them — this was the SSL failure cause
           install: |
             apt-get update -qq
             apt-get install -y --no-install-recommends \
+              ca-certificates \
               build-essential cmake ninja-build git \
               libdrm-dev pkg-config
+            update-ca-certificates
           run: |
+            set -e
+            echo "=== Architecture ==="
+            uname -m
+            echo "=== Cloning whisper.cpp ==="
             git clone --depth=1 https://github.com/ggml-org/whisper.cpp
+            echo "=== Configuring ==="
             cd whisper.cpp
             cmake -B build \
               -DGGML_VULKAN=OFF \
               -DWHISPER_FFMPEG=OFF \
               -DCMAKE_BUILD_TYPE=Release \
               -G Ninja
+            echo "=== Building ==="
             cmake --build build --config Release
+            echo "=== Collecting ==="
             mkdir -p /dist/bin/riscv64/cpu
             cp build/bin/whisper-cli    /dist/bin/riscv64/cpu/
             cp build/bin/whisper-server  /dist/bin/riscv64/cpu/
@@ -198,7 +206,9 @@ jobs:
             cp build/src/libwhisper*.so*    /dist/bin/riscv64/cpu/
             strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-cli
             strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-server
-            echo "=== Built binary ===" && file /dist/bin/riscv64/cpu/whisper-cli
+            echo "=== Done ==="
+            file /dist/bin/riscv64/cpu/whisper-cli
+            ls -lh /dist/bin/riscv64/cpu/
 
       - name: Note about ffmpeg on riscv64
         run: |
@@ -234,14 +244,12 @@ jobs:
         run: |
           mkdir -p release/ai-whisper
 
-          # Merge all arch builds
           for arch in amd64 arm64 riscv64; do
             if [ -d "all-artifacts/ai-whisper-$arch" ]; then
               cp -r all-artifacts/ai-whisper-$arch/. release/ai-whisper/
             fi
           done
 
-          # Copy project files from repo
           cp whisper.sh              release/ai-whisper/
           cp -r public/              release/ai-whisper/public/
           cp -r samples/             release/ai-whisper/samples/ 2>/dev/null || true
@@ -275,15 +283,15 @@ jobs:
             ./whisper.sh --server --port=8082
             ```
 
-            ### Architectures included
+            ### Architectures
 
-            | Target | Backend | Built on |
+            | Target | Backend | Runner |
             |---|---|---|
             | `bin/amd64/vulkan/` | Vulkan GPU | `ubuntu-24.04` native |
-            | `bin/amd64/ffmpeg`  | Static ffmpeg | bundled |
-            | `bin/arm64/a720/`   | Vulkan GPU | `ubuntu-24.04-arm` native |
-            | `bin/arm64/a76/`    | Vulkan GPU | `ubuntu-24.04-arm` native |
-            | `bin/arm64/ffmpeg`  | Static ffmpeg | bundled |
+            | `bin/amd64/ffmpeg` | Static ffmpeg | bundled |
+            | `bin/arm64/a720/` | Vulkan GPU | `ubuntu-24.04-arm` native |
+            | `bin/arm64/a76/` | Vulkan GPU | `ubuntu-24.04-arm` native |
+            | `bin/arm64/ffmpeg` | Static ffmpeg | bundled |
             | `bin/riscv64/cpu/` | CPU only | QEMU |
 
             ### Requirements

@@ -9,14 +9,15 @@ ARG VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Base build deps
+# Base build deps — ca-certificates FIRST so git clone works under QEMU
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build git ca-certificates \
+    ca-certificates \
+    build-essential cmake ninja-build git \
     libdrm-dev pkg-config \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Vulkan dev libs — amd64 and arm64 only
-# Use a separate RUN so QEMU riscv64 layer doesn't try to install missing pkgs
 RUN if [ "$TARGETARCH" = "amd64" ] || [ "$TARGETARCH" = "arm64" ]; then \
         apt-get update -qq && apt-get install -y --no-install-recommends \
             libvulkan-dev glslc spirv-headers \
@@ -37,10 +38,7 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
         cmake --build build --config Release; \
     fi
 
-# ── arm64: Vulkan, generic march (QEMU safe — no CPU detection) ──────────────
-# We use armv8-a here because the container image runs on any ARM64 SBC.
-# The portable binary build.yml uses native runners with CPU detection for
-# arch-specific builds (a720, a76). The container is intentionally generic.
+# ── arm64: Vulkan, generic march (QEMU safe) ─────────────────────────────────
 RUN if [ "$TARGETARCH" = "arm64" ]; then \
         cd /src/whisper.cpp && \
         cmake -B build \
