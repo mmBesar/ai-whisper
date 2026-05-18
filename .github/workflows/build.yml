@@ -195,6 +195,8 @@ jobs:
               -DGGML_VULKAN=OFF \
               -DWHISPER_FFMPEG=OFF \
               -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_FLAGS="-Wno-pedantic" \
+              -DCMAKE_CXX_FLAGS="-Wno-pedantic" \
               -G Ninja
             echo "=== Building ==="
             cmake --build build --config Release
