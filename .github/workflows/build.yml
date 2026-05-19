@@ -226,7 +226,6 @@ jobs:
     name: Assemble Release
     needs: [build-amd64, build-arm64, build-riscv64]
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
       - uses: actions/checkout@v6
