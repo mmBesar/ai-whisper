@@ -210,7 +210,6 @@ jobs:
             strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-cli
             strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-server
             echo "=== Done ==="
-            file /dist/bin/riscv64/cpu/whisper-cli
             ls -lh /dist/bin/riscv64/cpu/
 
       - name: Note about ffmpeg on riscv64

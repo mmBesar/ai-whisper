@@ -10,12 +10,6 @@ permissions:
   contents: read
   packages: write
 
-# ── RISC-V64 note ────────────────────────────────────────────────────────────
-# riscv64 builds via QEMU on ubuntu-24.04 — slow but works.
-# When RISE native runners become available (riseproject.dev),
-# change riscv64 runner to: ubuntu-24.04-riscv and remove the QEMU step.
-# ────────────────────────────────────────────────────────────────────────────
-
 jobs:
   build-image:
     name: Build ${{ matrix.arch }} image
@@ -74,11 +68,11 @@ jobs:
             GIT_SHA=${{ github.sha }}
             VERSION=${{ github.ref_name }}
 
+  # Merge always runs after builds — not just on tags
   merge-manifest:
     name: Merge multi-arch manifest
     needs: build-image
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/')
 
     steps:
       - name: Log in to GHCR
