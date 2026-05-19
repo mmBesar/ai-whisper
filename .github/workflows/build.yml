@@ -211,15 +211,9 @@ jobs:
             strip --strip-unneeded /dist/bin/riscv64/cpu/whisper-server
             echo "=== Done ==="
             ls -lh /dist/bin/riscv64/cpu/
-
-      - name: Note about ffmpeg on riscv64
-        run: |
-          mkdir -p dist/bin/riscv64
-          cat > dist/bin/riscv64/ffmpeg.note << 'EOF'
-          No static ffmpeg binary available for riscv64 yet.
-          Install system ffmpeg: sudo apt install ffmpeg
-          whisper.sh detects this and falls back to system ffmpeg automatically.
-          EOF
+            echo "No static ffmpeg for riscv64 yet. Install: sudo apt install ffmpeg" \
+              > /dist/bin/riscv64/ffmpeg.note
+            chmod -R 777 /dist
 
       - uses: actions/upload-artifact@v7
         with:
