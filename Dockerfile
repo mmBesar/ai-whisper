@@ -56,8 +56,11 @@ RUN if [ "$TARGETARCH" = "riscv64" ]; then \
         cd /src/whisper.cpp && \
         cmake -B build \
             -DGGML_VULKAN=OFF \
+            -DGGML_RVV=OFF \
             -DWHISPER_FFMPEG=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-Wno-error -Wno-pedantic -Wno-implicit-function-declaration" \
+            -DCMAKE_CXX_FLAGS="-Wno-error -Wno-pedantic" \
             -G Ninja && \
         cmake --build build --config Release; \
     fi
